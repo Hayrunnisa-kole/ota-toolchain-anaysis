@@ -15,23 +15,19 @@
 
 # 1. Binary Kimlik Analizi
 
-* Hedef platform analizi (`.z1` / `.sky` / `ARM M4F(CC1352R)` / `cooja-native`)
-* MSP430 mimari tipi
-* ELF format bilgisi
-* Endianness nedir ve Endianness bilgisi
-* Entry point adresi
-* ABI nedir ve ABI bilgisi
-* Compiler izi
-* Toolchain versiyonu
-* Optimization level tahmini
-* Debug symbol var/yok analizi
+![alt text](<images/Ekran görüntüsü 2026-05-21 171809.png>)
+`new-firmware.z1` bellenim imajı üzerinde `msp430-readelf -h` komutu çalıştırılarak elde edilen parametreler ve bu parametrelerinanalizleri aşağıda sunulmuştur:
 
-Araçlar:
-
-* `msp430-readelf`
-* `msp430-objdump`
-* `msp430-strings`
-* `Ve üstteki araçların ARM versiyonları...`
+**Hedef Platform Analizi (`.z1` / `.sky` / `ARM M4F(CC1352R)` / `cooja-native`):** Bellenim dosyasının `.z1` uzantısına sahip olması ve analiz çıktılarındaki donanım kısıtları, bu imajın MSP430 tabanlı ultra düşük güçlü kablosuz duyarga ağı platformları (Z1 Motes) için üretildiğini göstermektedi.
+**MSP430 Mimari Tipi:** Çıktıda yer alan `Machine: Texas Instruments msp430 microcontroller` ifadesi, bellenimin 16/32-bit RISC mimarisine sahip düşük güçlü TI MSP430 çekirdeği için derlendiğini doğrulamaktadır.
+**ELF Format Bilgisi:** `Class: ELF32` olarak okunmuştur.Bu bilgi, dosyanın 32-bit nesne ve yürütülebilir dosya formatında (Executable and Linkable Format) olduğunu; ham bir binary (makine kodu yığını) olmadığını, işletim sistemi veya bootloader tarafından anlamlandırılabilecek başlık ve kesit tabloları barındırdığını gösterir.
+**Endianness Nedir ve Endianness Bilgisi:** Endianness, çoklu bayt verilerinin (örneğin 16 veya 32 bitlik tamsayılar) bellekte hangi sırayla depolanacağını belirleyen mimari kuraldır. Çıktıda yer alan `2's complement, little endian` bilgisi, verinin en önemsiz baytının (LSB) en düşük bellek adresine, en önemli baytının (MSB) ise en yüksek bellek adresine yerleştirileceğini ifade eder.
+**Entry Point Adresi:** `0x3100`.Mikrodenetleyici donanımla buluşup resetlendikten veya uyandıktan sonra, işlemcinin program sayacının (Program Counter - PC) dallanacağı ve bellenimin ilk makine komutunu yürütmeye başlayacağı başlangıç adresidir.
+**ABI Nedir ve ABI Bilgisi:** ABI (Application Binary Interface), derlenmiş makine kodunun çalışma zamanında donanımla, registerlarla veya işletim sistemiyle nasıl etkileşime gireceğini belirleyen arayüz standartları bütünüdür (fonksiyon çağrı kuralları, veri yapısı yerleşimleri vb.). Çıktıda `OS/ABI: Standalone App` ve `ABI Version: 0` olarak tespit edilmiştir. Bu durum, bellenimin harici bir dinamik kütüphaneye veya dinamik işletim sistemi çalışma zamanı katmanına bağımlı olmadığını, donanım üzerinde doğrudan ve bağımsız (bare-metal/monolithic) çalışacak şekilde paketlendiğini gösterir.
+**Compiler İzi:** ELF başlığındaki bayrak yerleşimleri ve bölüm düzeni incelendiğinde, bellenimin GNU GCC ekosistemine ait `msp430-gcc` derleyicisi tarafından üretildiğine dair karakteristik yapısal izler taşımaktadır.
+**Toolchain Versiyonu:** `Version: 0x1` (current) olarak raporlanmıştır. Bu, ELF format standartlarının güncel ana versiyonuyla derlendiğini gösterir.Analizde ise `msp430` araç zinciri (toolchain) bileşenleri kullanılmıştır.
+**Optimization Level Tahmini:** `Start of section headers` offsetinin dosya boyutunun oldukça ilerisinde olması ve çok sayıda debug bölüm tablosu barındırması, derleyicinin kodu aşırı derecede agresif optimize etmediğini (büyük olasılıkla `-O0` veya kod boyutu optimizasyonu için `-Os` seviyesinde tutulduğunu) göstermektedir.
+**Debug Symbol Var/Yok Analizi:** `Number of section headers: 21` olarak tespit edilmiştir.21 adet kesit başlığının varlığı, dosya içeriğinde sembol tablosu, dizgiler ve hata ayıklama (debug) izlerinin korunduğunu, yani dosyanın sembollerden arındırılmadığını (**not stripped**) göstermektedir.
 ---
 
 # 2. Bellek Kullanım Analizi
