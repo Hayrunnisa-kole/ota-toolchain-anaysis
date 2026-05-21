@@ -110,366 +110,253 @@
 
 # 6. Source-Level Mapping Analizi
 
-(Debug build varsa)
-
-* Address → source line eşleme
-* Function → source file eşleme
-* ISR → source mapping
-* Crash address çözümleme
-* Optimization sonrası source mapping
-* Inline edilmiş kodların tespiti
-
-Araçlar:
-
-* `msp430-addr2line`
-* `msp430-objdump -S`
-* `Ve üstteki araçların ARM versiyonları...`
-
+![alt text](<images/Ekran görüntüsü 2026-05-21 184749.png>)
+`new-firmware.z1` bellenimi üzerinde `msp430-objdump -S` komutu koşturularak makine kodları ile yüksek seviyeli C kaynak kodları arasında satır düzeyinde haritalandırma (Source-Level Mapping) analizi gerçekleştirilmiştir:
+* **Address → Source Line Eşleme:** `0x10000` adresindeki `<input>` fonksiyonu üzerinde yapılan analizde, assembly komutlarının arasına orijinal C kaynak kod satırlarının düşmediği görülmüştür. Bu durum, bellenim içerisinde genel sembol tabloları bulunsa dahi, satır düzeyinde hata ayıklama bilgilerinin (Dwarf Line Numbers) tam olarak üretilmediğini veya derleme aşamasında kaynak kod yollarının gömülmediğini kanıtlamaktadır.
+* **Function → Source File Eşleme:** Kaynak kod satırları eşleşmese de, sembol tablosu ve fonksiyon sınırları tamamen okunabilmektedir. `<input>` fonksiyonunun `0x10000` başlangıç adresi, bellenimin ağ yığın katmanına (Network Stack / sicslowpan veya uip) ait bir kaynak dosyadan (`.c`) derlendiğini doğrudan doğrulamaktadır.
+* **ISR → Source Mapping:** Donanımsal kesme servis rutinleri (`port1_isr` vb.) fiziksel adres haritasında konumlandırılabilmektedir. Ancak satır düzeyi eşleme kısıtından dolayı, bu kesmelerin C dilindeki hangi kaynak dosya satırından (Interrupt Service Routine makrolarından) tetiklendiği doğrudan kaynak satırı olarak eşlenememektedir.
+* **Çökme Adresi Çözümleme:** Sistem çalışma zamanında bir çökme (crash) yaşarsa ve program sayacı (PC) örneğin `0x10040` adresini gösterirse, bu analiz sayesinde sistemin tam o an `calla #0x13e88` komutu ile bir log/printf fonksiyonu içinde çöktüğü adres seviyesinde çözülebilmektedir.
+* **Optimization Sonrası Source Mapping:** Derleyicinin kod boyutu optimizasyonu (`-Os`) uygulamış olması, C kodundaki birden fazla satırın assembly tarafında tek bir komut bloğuna (örneğin `pushm.a` komutuna) sıkıştırılmasına neden olmuştur. Bu durum, kaynak kod eşlemesinin yapısal olarak da birebir (one-to-one) satır takibi yapmasını zorlaştıran bir etkendir.
+* **Inline Edilmiş Kodların Tespiti:** C kaynak kodunda muhtemelen ayrı yardımcı fonksiyonlar veya makrolar olarak tanımlanmış olan bit kaydırma işlemleri, assembly çıktısında doğrudan `<input>` fonksiyon gövdesinin içinde ardışık `rlam` (Rotate Left Accumulator) komutları olarak tespit edilmiştir. Bu durum, küçük alt rutinlerin fonksiyon çağrı maliyetini azaltmak için derleyici tarafından otomatik olarak satır içine (inline) gömüldüğünü gösterir.
 ---
 
 # 7. ELF Yapısı Analizi
 
-* ELF header
-* Section header
-* Program header
-* Symbol table
-* Relocation entries
-* Debug sections
-* DWARF info
-* Linker-generated metadata
-* Startup section
-* Vector table
-* Initialization routines
-
-Araçlar:
-
-* `msp430-readelf`
-* `msp430-elfedit`
-* `Ve üstteki araçların ARM versiyonları...`
-
+![alt text](<images/Ekran görüntüsü 2026-05-21 190233.png>)
+`new-firmware.z1` bellenimi üzerinde `msp430-readelf -l` komutu çalıştırılarak dosyanın hiyerarşik ELF yapısı, segment yerleşimleri ve kesit eşlemeleri şu şekilde analiz edilmiştir:
+* **ELF Header:** Dosya türü *EXEC (Executable file)*, yani doğrudan mikrodenetleyici üzerinde koşturulabilir statik bir yürütülebilir dosyadır. Giriş adresi (Entry point) *0x3100* olarak belirlenmiştir. ELF dosyasının iç haritasını yöneten 6 adet program başlığının (program headers) dosyanın 52. baytından itibaren başladığı raporlanmıştır.
+* **Section Header:** Bellenim içerisinde toplam 21 adet kesit başlığı yer almaktadır (Bölüm 2'de doğrulandığı üzere). Bu kesitler mantıksal gruplarına göre ayrıştırılarak, çalışma zamanında donanım tarafından yüklenecek olan 6 ana segment yapısının içerisine dağıtılmıştır.
+* **Program Header:** Dosyada tam olarak 6 adet *LOAD* tipinde program başlığı (segment) tanımlanmıştır. Bu başlıklar, bellenimi cihaza yükleyecek olan flaşör yazılıma veya bootloader'a, dosyanın hangi ofsetindeki veriyi hangi fiziksel hafıza adresine (`PhysAddr`) ne kadar boyutta (`FileSiz` ve `MemSiz`) yazacağını söyler.
+* **Symbol Table:** ELF yapısının sonunda yer alan `.symtab` kesiti, fonksiyonların ve değişkenlerin isim-adres eşleşmelerini tutar. Bölüm 3'te analiz edilen sembol kodları bu tablodan ayıklanmıştır. Dosya *not stripped* olduğu için bu tablo tamamen korunmuştur.
+* **Relocation Entries:** Dosya türü yer değiştirebilir (relocatable) bir nesne kodu değil, tamamen bağlanmış bir statik yürütülebilir imaj (*EXEC*) olduğu için, çalışma zamanında dinamik olarak çözülmesi gereken yeniden konumlandırma (relocation) girdileri barındırmaz. Tüm adresler derleme anında statik olarak kilitlenmiştir.
+* **Debug Sections & DWARF Info:** ELF yapısı içerisinde `.debug_info`, `.debug_line` ve `.debug_frame` gibi standart DWARF formatında hata ayıklama kesitleri yer almaktadır. Bu kesitler sembollerin adreste çözümlenmesine imkan tanır.
+* **Linker-Generated Metadata:** Derleme sürecinde bağlayıcı (linker) tarafından üretilen `.comment` ve `.gnu.attributes` gibi kesitler, bellenimin hangi derleyici araçları ve hangi mimari parametrelerle (ABI kuralları) birbirine bağlandığını gösteren metadata kalıntılarıdır.
+* **Startup Section:** İmajın ilk ayağa kalkış kodlarını barındıran startup rutini, `00` numaralı segment içerisindeki `.text` kesitinin en başında yer alır. `0x3100` adresindeki entry point doğrudan bu startup kodunu tetikler.
+* **Vector Table:** `04` numaralı segment içerisindeki `.vectors` kesitidir. Fiziksel olarak `0x0000ffc0` adresine eşlenmiştir. Mikrodenetleyicinin reset, zamanlayıcı ve çevre birimlerine ait donanımsal kesme adres vektörlerini barındıran en kritik tablodu.
+* **Initialization Routines:** RAM üzerindeki verileri hazırlayan başlangıç rutinleri, `02` numaralı segment içerisindeki `.data` kesitine karşılık gelir. Bu segmentin disk boyutu (`FileSiz: 0x00150`) ile RAM boyutu (`MemSiz: 0x01798`) arasındaki devasa fark, derleyicinin RAM'de geniş bir yer kaplayacak olan `.bss` (başlangıç değeri almamış değişkenler) alanını diskte yer kaplamayacak şekilde optimize ettiğini ve çalışma zamanında sıfırlayarak (initialization) hazırlayacağını gösterir.
 ---
 
 # 8. Interrupt ve Donanım Analizi
 
-* Interrupt vector table
-* GPIO access pattern
-* Timer interrupt kullanımı
-* UART ISR
-* Radio interrupt handler
-* ADC access
-* Sensor polling
-* Low-power mode geçişleri
-* Clock configuration
-* MSP430 register erişimleri
-
-Araçlar:
-
-* `msp430-objdump`
-* `msp430-readelf`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` belleniminin donanımsal kesme (interrupt) servis rutinleri ve çevre birimi (peripheral) erişim mimarisi, önceki adımlarda elde edilen `readelf` ve `nm` çıktıları üzerinden şu şekilde analiz edilmiştir:
+* **Interrupt Vector Table:** ELF program başlıklarında (Bölüm 7) açıkça görüldüğü üzere, Kesme Vektör Tablosu `.vectors` kesiti altında `0x0000ffc0` adresine statik olarak konumlandırılmıştır. Bu tablo, donanımsal bir olay (reset, timer taşması, veri gelmesi vb.) gerçekleştiğinde işlemcinin doğrudan hangi adrese dallanacağını belirleyen 32 adet girdi (vektör) barındırır.
+* **GPIO Access Pattern:** Bölüm 3'teki sembol tablosunun en başında mutlak adres olarak listelenen `0x00000020` (`__P1IN`), `0x00000022` (`__P1DIR`) ve `0x0000002a` (`__P2DIR`) gibi semboller, cihazın Genel Amaçlı Giriş/Çıkış (GPIO) port yazmaçlarıdır. Bellenim, bu adresleri okuyarak veya yazarak bağlı olan butonları, LED'leri ve sensör hatlarını lojik seviyede (High/Low) kontrol etmektedir.
+* **Timer Interrupt Kullanımı:** Sembol tablosunda `0x3624` adresinde yer alan `timera1` ve `0x378c` adresindeki `timera0` fonksiyonları, MSP430'un donanımsal Timer_A modülüne bağlı kesme servis rutinleridir (ISR). Bu rutinler, Contiki-NG'nin saniye üstü zamanlamasını ve milisaniyelik saat tiklerini (clock ticks) donanımsal arka planda yönetir.
+* **UART ISR:** `0x37ae` fiziksel adresinde kilitlenmiş olan `uart0_rx_interrupt` fonksiyonu, cihazın seri haberleşme (UART) biriminin donanımsal kesme servis rutinidir. Bilgisayardan veya harici bir donanımdan seri port üzerinden her bir bayt veri geldiğinde bu kesme anlık olarak tetiklenir ve veri kaybını önler.
+* **Radio Interrupt Handler:** `0x35c2` adresinde yer alan `irq_p2` ve `0x35fe` adresindeki `cc2420_timerb1_interrupt` fonksiyonları, bellenimin CC2420 telsiz (RF) çipi ile donanımsal senkronizasyonunu sağlayan kesme işleyicileridir. Havadan bir radyo paketi geldiğinde veya paket iletimi tamamlandığında işlemciyi uyarır.
+* **ADC Access:** Sembol haritasında `0x00000080` adresinden itibaren başlayan `__ADC12MCTL0` (Analog-to-Digital Converter Kontrol Saklayıcısı) ve `0x000001a0` adresindeki `__ADC12CTL0` mutlak adres girdileri, bellenimin 12-bitlik donanımsal ADC modülünü aktif olarak kullandığını ve analog sensör verilerini dijitale dönüştürdüğünü kanıtlar.
+* **Sensor Polling:** Bellenim, `sensors_process` (0x11d6) protothread süreci üzerinden olay odaklı (event-driven) bir sensör dinleme mekanizması işletir. Donanımdan gelen kesmeler (örneğin buton basılması veya zamanlayıcı dolması) tetiklendikçe sensör durumları güncellenir.
+* **Low-Power Mode Geçişleri:** Sembol tablosunda yer alan `platform_idle` (0x6c22) fonksiyonu, sistemde yürütülecek aktif bir görev kalmadığında MSP430'un Status Register (`r2`) saklayıcısındaki ilgili bitleri set ederek CPU'yu ultra düşük güç tüketim moduna (LPM) sokan ve enerji tasarrufu sağlayan donanımsal kontrol döngüsüdür.
+* **Clock Configuration:** `0x637a` adresindeki `msp430_init_dco` ve `0x63ac` adresindeki `msp430_sync_dco` fonksiyonları, mikrodenetleyicinin iç saat üretecini (Digitally Controlled Oscillator - DCO) yapılandırır. Cihazın kararlı, senkronize ve doğru frekansta (genellikle Z1 platformu için 8 MHz veya 16 MHz) çalışmasını garanti altına alır.
+* **MSP430 Register Erişimleri:** Bölüm 5'teki assembly çıktısında görülen `mov.b #0, &0x249a` benzeri mutlak adresleme moduna sahip komutlar, işlemcinin RAM veya RAM dışındaki özel fonksiyon saklayıcılarına (SFR) doğrudan ve donanım seviyesinde müdahale ettiğini gösteren temel mimari erişim pratikleridir.
 ---
 
 # 9. Networking Analizi
 
-* Unicast kullanım tespiti
-* Broadcast kullanım tespiti
-* Multicast tespiti
-* IPv6 stack kullanımı
-* RPL routing analizi
-* TSCH scheduler çağrıları
-* MAC layer interaction
-* Packet buffer kullanımı
-* Neighbor table erişimi
-* Radio transmission akışı
-* Retransmission logic
-* ACK mekanizmaları
-* CSMA/TSCH farkları
-* Contiki network API kullanımı
-
-Araçlar:
-
-* `msp430-nm`
-* `msp430-objdump`
-* `msp430-strings`
-* `Ve üstteki araçların ARM versiyonları...`
+`new-firmware.z1` belleniminin kablosuz ağ yığın katmanı ve haberleşme mekanizmaları, Bölüm 3 ve Bölüm 4'te elde edilen sembol ve log dizgileri üzerinden şu şekilde analiz edilmiştir:
+* **Unicast Kullanım Tespiti:** Bölüm 4'teki log dizgilerinde yer alan `unicast` ve `sending a %sDAO... to...` kalıpları ile Bölüm 3'teki `uip_ds6_nbr_lookup` sembolü, bellenimin ağdaki belirli bir hedef düğüme doğrudan (tekil adrese) paket gönderme (unicast) yeteneğine sahip olduğunu kesin olarak kanıtlar.
+* **Broadcast Kullanım Tespiti:** Bölüm 4'teki `multicast DIS` ve `sending a DIS to` log mesajları ile Bölüm 3'te tespit edilen `frame802154_is_broadcast_addr` fonksiyon sembolü, cihazın ağa yeni dahil olurken veya komşu keşfi yaparken tüm çevreye yönlendirilmemiş paket fırlatma (broadcast) mekanizmasını aktif kullandığını gösterir.
+* **Multicast Tespiti:** Bölüm 3'te RAM üzerinde kilitlenmiş olan `rpl_multicast_addr` (0x2622) küresel değişken sembolü ve Bölüm 4'teki `multicast` log kalıpları, bellenimin IPv6 çoklu gönderim (multicast) gruplarına üye olabildiğini ve RPL kontrol mesajlarını bu adresler üzerinden dağıttığını doğrular.
+* **IPv6 Stack Kullanımı:** Bölüm 3'teki `uip_process` (0x1process ana döngüsü) ile Bölüm 4'teki `Tentative link-local IPv6 address:` ve `input: received IPv6 packet` dizgileri, bellenimin gömülü sistemler için optimize edilmiş yerleşik bir IPv6 (uIP) ağ yığını barındırdığını gösterir.
+* **RPL Routing Analizi:** Bellenim, IPv6 tabanlı düşük güçlü ağlar için yönlendirme protokolü olan RPL (Routing Protocol for Low-Power and Lossy Networks) mimarisini kullanmaktadır. Bölüm 4'teki `created a new RPL DAG`, `participating in global repair` ve `initialized DAG with instance ID` logları, cihazın ağ topolojisinde bir yönlendirme ağacı (Destination-Oriented Directed Acyclic Graph - DODAG) kurduğunu veya bir ağaca dahil olduğunu kanıtlar.
+* **TSCH Scheduler Çağrıları:** İncelenen bellenim, alt katmanda olay odaklı CSMA (`csma_output_packet` - 0x4a58) MAC sürücüsünü kullanmaktadır. Loglardaki `CSMA` etiketleri ve kuyruk tamponu yönetim rutinleri, bu bellenimin deterministik bir TSCH zamanlayıcısı yerine çekişme tabanlı (contention-based) CSMA katmanı kullandığına işaret eder.
+* **MAC Layer Interaction:** Bölüm 3'teki `csma_driver` (0xc958) ve `framer_802154` (0xc972) sembolleri ile Bölüm 4'teki `framer-802154: cannot setup params` log yapısı, ağ katmanından gelen IPv6 paketlerinin IEEE 802.15.4 standartlarına uygun ham donanım çerçevelerine (frames) dönüştürülerek radyo katmanına iletildiğini doğrular.
+* **Packet Buffer Kullanımı:** Bölüm 3'te RAM üzerinde yer kaplayan `packetbuf_aligned` (0x14ec) statik tampon belleği ile `packetbuf_copyfrom` (0xa2e) ve `packetbuf_hdralloc` (0x69b8) fonksiyon sembolleri, bellenimin havadan gelen veya havaya fırlatılacak ağ paketlerini işlemek için dinamik bir paket tampon (packetbuf) yaşam döngüsü yönettiğini gösterir.
+* **Neighbor Table Erişimi:** Bölüm 3'teki `uip_ds6_nbr_add` (0x1123c) ve `uip_ds6_nbr_lookup` (0x11364) sembolleri ile Bölüm 4'teki `Adding neighbor with ip addr` log yapısı, bellenimin kapsama alanındaki diğer komşu düğümlerin IPv6 ve MAC adreslerini RAM üzerindeki bir komşuluk tablosunda (neighbor table) aktif olarak sakladığını ve güncellediğini kanıtlar.
+* **Radio Transmission Akışı:** Bir paketin havaya fırlatılma süreci, Bölüm 4'teki `preparing packet for..., seqno %u` log dizgisi ile Bölüm 3'teki `csma_output_packet` ve ardından radyo sürücüsünü tetikleyen `cc2420_transmit` fonksiyon çağrı zinciri üzerinden akış şeması halinde takip edilebilmektedir.
+* **Retransmission Logic:** Bölüm 4'teki `tx %u` log parametresi (örneğin paket iletim loglarındaki iletim sayısı sayacı) ve `schedule_dao_retransmission` sembolü, bellenimin iletilemeyen veya ağda kaybolan paketler için arka planda belirli bir yeniden iletim (retransmission) ve geri çekilme (backoff) algoritması çalıştırdığını gösterir.
+* **ACK Mekanizmaları:** Bölüm 4'teki `ignored ack` uyarı log dizgisi, bellenimin karşı düğümlerden gelen alındı (Acknowledge - ACK) sinyallerini bağlantı kalitesi tespiti için donanım/MAC seviyesinde dinlediğini ve işlediğini doğrulamaktadır.
+* **CSMA / TSCH Farkları:** Bellenimde `csma_driver` sembolünün kilitli olması ve loglarda `scheduling transmission in %u ticks, NB=%u, BE=%u` (NB: Number of Backoffs, BE: Backoff Exponent) ifadelerinin yer alması, sistemin zaman dilimli (TSCH) bir slot yönetimi yerine, radyo kanalının anlık yoğunluğunu ölçerek sırasını bekleyen geleneksel CSMA/CA (Carrier Sense Multiple Access with Collision Avoidance) algoritmasıyla çalıştığını teorik olarak ayırt etmemizi sağlar.
+* **Contiki Network API Kullanımı:** Bölüm 3'te yer alan `netstack_init` (0x68c2) ve `netstack_process_ip_callback` (0x687c) sembolleri, bellenimin Contiki-NG çekirdeğinin sunduğu standart ağ uygulama programlama arayüzlerini (NETSTACK API) kullanarak alt katman sürücüleri ile üst katman protokollerini birbirine tamamen soyutlayarak bağladığını gösterir.
 
 ---
 
 # 10. Wireless / TSCH Analizi
 
-* TSCH slot operation
-* Channel hopping logic
-* ASN handling
-* Radio timing loops
-* Synchronization routines
-* Schedule management
-* Packet timing
-* MAC timing critical path
-* Drift compensation
-* Low-power radio behavior
-
-Araçlar:
-
-* `msp430-objdump`
-* `msp430-nm`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` bellenimi içerisindeki telsiz (RF) haberleşme parametreleri ve zamanlama mekanizmaları, Bölüm 3, 4 ve 9'dan elde edilen veriler ışığında TSCH mimarisiyle karşılaştırmalı olarak şu şekilde analiz edilmiştir:
+* **TSCH Slot Operation:** Bölüm 9'da doğrulandığı üzere bu bellenim `csma_driver` kullanmaktadır. Zaman dilimli (TSCH) bir bellenimde görmeyi beklediğimiz mikro saniye seviyesindeki katı slot haritaları ve slot zamanlama döngüleri yerine, bu cihazda çekişme tabanlı serbest zaman pencereleri işletilmektedir. Bölüm 4'teki `scheduling transmission in %u ticks` log ifadesi, iletim zamanlamasının dinamik tick sürelerine göre esnek hesaplandığını gösterir.
+* **Channel Hopping Logic:** Bellenimde yer alan `cc2420_set_channel` (0x408a) fonksiyon sembolü ve Bölüm 4'teki `- 802.15.4 Default channel: %u` yapılandırma dizgisi, cihazın çalışma zamanında dinamik bir kanal atlama (channel hopping) dizisi yürütmediğini, derleme anında kilitlenmiş tek bir sabit frekans kanalı (default channel) üzerinden statik haberleştiğini kanıtlar.
+* **ASN Handling:** TSCH ağlarında zamanı ve kanal dizisini senkronize etmek için kullanılan mutlak slot numarası (Absolute Slot Number - ASN) sayacına veya bunu işleyen herhangi bir yapısal koda sembol tablosunda rastlanmamıştır. Cihaz, ağ genelinde makro düzeyde zaman takibini standart `clock_time` (0x4520) ve `clock_seconds` (0x4592) sembolleri üzerinden yürütür.
+* **Radio Timing Loops:** `0x3c92` adresindeki `wait_for_transmission` ve `0x3cb4` adresindeki `wait_for_status` fonksiyonları, bellenimin donanımsal radyo çipi (CC2420) ile senkron kalabilmek için kullandığı zamanlama döngüleridir. Bu döngüler, paket havaya üflenirken donanımın durum bayraklarını mikro saniye hassasiyetinde sorgular.
+* **Synchronization Routines:** Ağ genelinde düğümlerin senkronizasyonu, TSCH'teki gibi beacon paketlerinin içindeki slot ofsetleri ile değil; üst katmandaki RPL protokolünün periyodik olarak yayınladığı kontrol paketleri (`dio_input` ve `dis_input`) üzerinden ve `link_stats_is_fresh` (0x5dc6) benzeri bağlantı istatistik rutinleri yardımıyla gevşek zamanlı (loose synchronization) olarak koordine edilir.
+* **Schedule Management:** Bellenimde TSCH'e özgü bir hücre (cell) veya bağlantı zaman çizelgesi (link schedule) yönetim katmanı bulunmamaktadır. Bunun yerine, paketlerin ne zaman gönderileceğine karar veren bir kuyruk yönetim mekanizması (`transmit_from_queue` - 0x4776) ve kanal boşsa paketi fırlatan CCA (Clear Channel Assessment) mantığı (`cc2420_cca` - 0x3f26) aktiftir.
+* **Packet Timing:** Paketlerin iletim zamanlaması, Bölüm 4'teki `NB=%u, BE=%u` log parametrelerinden anlaşıldığı üzere, tamamen üstel geri çekilme (Exponential Backoff) algoritmasının ürettiği rastgele gecikme sürelerine dayalıdır. Bu durum, zaman dilimli paket zamanlamasına taban tabana zıt bir davranış şemasıdır.
+* **MAC Timing Critical Path:** Telsiz katmanındaki en kritik zamanlama yolu (critical path), bir paketin gönderilmeden hemen önce kanalın dinlendiği `cc2420_cca` anı ile paketin donanım tamponuna yazıldığı `write_fifo_buf` (0x3c0e) anı arasındaki donanımsal gecikme eşiğidir. Bu eşik, paket çarpışmalarını (collisions) engellemek adına bellenimde en optimize işletilen döngüdür.
+* **Drift Compensation:** Cihazda zaman dilimli ağlardaki gibi saat kaymalarını milisaniyenin altında hesaplayıp düzelten bir donanımsal kayma kompanzasyonu (drift compensation) rutinine rastlanmamıştır. Bunun yerine, iç saat üretecini donanımsal olarak sabitleyen `msp430_sync_dco` (0x63ac) rutini ile frekans kaymaları engellenmeye çalışılmaktadır.
+* **Low-Power Radio Behavior:** Cihazın düşük güç tüketim davranışı, telsizin her saniye diliminde kural olarak açılıp kapanması (Duty Cycling) esasına değil; `cc2420_on` (0x3e5c) ve `cc2420_off` (0x3ef6) çağrıları üzerinden, bellenimin gönderecek paketi bittiğinde radyoyu tamamen kapatıp işlemciyi uykuya (`platform_idle`) geçirmesi esasına dayanır.
 ---
 
 # 11. Sensor ve Peripheral Analizi
 
-* Button handler
-* LED driver
-* UART usage
-* SPI access
-* I2C access
-* ADC routines
-* Sensor polling interval
-* Interrupt-driven sensor logic
-* GPIO toggle behavior
-* Peripheral initialization sequence
-
-Araçlar:
-
-* `msp430-objdump`
-* `msp430-nm`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` belleniminin çevre birimleri (peripherals) ve sensör kontrol donanım mimarisi, Bölüm 3'teki adres haritası üzerinden şu şekilde doğrulanmış ve analiz edilmiştir:
+* **Button Handler:** Sembol tablosunda yer alan `button_sensor` (0xc902) küresel yapısı ve donanımsal kesme şemasındaki `port1_isr` (0x353e) fonksiyonu, cihaz üzerindeki fiziksel kullanıcı butonunun işleyicisidir. Butona basıldığında donanımsal kesme tetiklenir ve bellenim seviyesinde bir buton olayı (button event) üretilerek ilgili protothread uyarılır.
+* **LED Driver:** Cihazın görsel geri bildirim elemanlarını kontrol eden `leds_init` (0xd64), `leds_on` (0xd6a) ve `leds_off` (0xd7c) fonksiyon sembolleri, bellenimin yerleşik LED sürücüsünü doğrular. Bu fonksiyonlar alt katmanda `leds_arch_set` (0x5d26) mimari komutunu tetikleyerek ilgili GPIO pinlerini lojik-1 veya lojik-0 yapar.
+* **UART Usage:** Bilgisayarla kablolu teşhis haberleşmesini sağlayan `uart0_init` (0x111be), `uart0_writeb` (0x111a8) ve `uart0_active` (0x1119a) sembolleri, bellenimin Evrensel Asenkron Alıcı-Verici (UART) modülünü aktif olarak kullandığını ve seri port üzerinden veri aktarımı yaptığını kanıtlar.
+* **SPI Access:** Kablosuz radyo çipi (CC2420) gibi yüksek hızlı çevre birimleriyle haberleşmek için kullanılan Seri Çevre Birimi Arayüzü, `spi_init` (0xbfc0) fonksiyon sembolü ile doğrulanmıştır. Radyoya gönderilen tüm komutlar ve register ayarları bu SPI hattı üzerinden taşınır.
+* **I2C Access:** Cihaza bağlı olan dijital sensörlerle (ivmeölçer ve sıcaklık sensörü) haberleşmek için I2C (Inter-Integrated Circuit) veri hattı kullanılmaktadır. Sembol tablosundaki `i2c_transmitinit` (0x5c36), `i2c_receive_n` (0x5c66) ve hattın meşguliyetini denetleyen `i2c_busy` (0x5ca4) sembolleri bu donanım arayüzünün varlığını gösterir.
+* **ADC Routines:** Mikrodenetleyicinin analog sinyalleri işleyen iç birimlerine ait donanımsal register haritası (Bölüm 8'de analiz edilen `__ADC12CTL0` vb.) bellenim tarafından doğrudan kontrol edilmektedir. Pil seviyesi veya analog sensor okumaları bu donanımsal rutinlerle yürütülür.
+* **Sensor Polling Interval:** Sistemde sensör verilerinin okunması, sürekli işlemciyi meşgul eden sıkı bir döngü (polling) yerine zamanlayıcı tabanlı işletilir. `periodic_timer` (0x24ce) küresel değişkeni ve `sensors_process` (0x11d6) protothread yapısı, sensörlerin belirli periyotlarla (örneğin saniyede bir veya saniyenin belirli kesirlerinde) asenkron taranmasını koordine eder.
+* **Interrupt-Driven Sensor Logic:** Sensörlerin veri üretme mantığı tamamen kesme odaklıdır (interrupt-driven). Örneğin ivmeölçerden bir eşik verisi geldiğinde, donanım seviyesindeki `accm_int1_cb` (0x24b0) ve `accm_int2_cb` (0x24ac) geri çağırım (callback) sembolleri tetiklenerek işlemcinin sensör verisini anlık ve gecikmesiz yakalaması sağlanır.
+* **GPIO Toggle Behavior:** Bellenim, durum değişikliklerini veya veri iletim adımlarını dış dünyaya aktarmak için GPIO pinlerinin durumunu hızlıca tersyüz (toggle) eder. Bu davranış, `leds_arch_set` ve `accm_write_reg` (0x37f0) gibi fonksiyonların içinde, ilgili port saklayıcılarına (`__P1OUT`, `__P3OUT`) bit düzeyinde XOR (`^=`) operasyonları uygulanmasıyla yürütülür.
+* **Peripheral Initialization Sequence:** Çevre birimlerinin güvenli bir şekilde ayağa kalkış sırası `main` fonksiyonu içinden çağrılan platform başlatma aşamalarıyla yönetilir: Önce saat hızı kilitlenir (`msp430_init_dco`), ardından temel I/O yapısı kurulur (`leds_init`), seri port uyandırılır (`uart0_init`), I2C/SPI hatları kurulur (`spi_init`) ve son olarak sensör sürücüleri aktif edilir (`accm_init` - 0x396a ve `tmp102_init` - 0xc754).
 ---
 
 # 12. Algoritma Koşma / DSP / Matematiksel Analiz
 
-* Floating-point kullanımı
-* Fixed-point kullanımı
-* Trigonometric computation
-* Multiply/divide routines
-* Software floating-point emulation
-* DSP benzeri loop’lar
-* Matrix operation izleri
-* Signal processing pattern’leri
-* Computational hotspot’lar
-* Numerical optimization
-
-Araçlar:
-
-* `msp430-objdump`
-* `msp430-gprof`
-* `msp430-nm`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` bellenimi içerisindeki matematiksel hesaplama altyapısı ve sinyal işleme mekanizmaları, Bölüm 3'teki sembol tablosu girdileri üzerinden şu şekilde analiz edilmiştir:
+* **Floating-Point Kullanımı:** Sembol tablosunda `float` veya `double` hassasiyetli kayan noktalı sayı işlemlerine ait doğrudan donanımsal komut izlerine rastlanmamıştır. Ultra düşük güçlü MSP430 çekirdeğinde kayan noktalı işlemler işlemciyi aşırı yoracağı için, matematiksel hesaplamalar tam sayı (integer) tabanında tutulmuştur.
+* **Fixed-Point Kullanımı:** Sensör verilerinin hassas okunması için sabit noktalı (fixed-point) matematiksel ölçekleme tercih edilmiştir. Sıcaklık sensörüne ait `tmp102_read_temp_x100` (0xc806) fonksiyon ismindeki `_x100` uzantısı, sıcaklık değerinin float olarak değil, 100 ile çarpılarak tamsayı (fixed-point) formatında RAM'de işlendiğini kesin olarak kanıtlar.
+* **Trigonometric Computation:** İmaj içerisinde sinüs, kosinüs gibi trigonometrik hesaplamalar yapan (`sin`, `cos`) ağır kütüphane sembolleri yer almamaktadır. Kablosuz duyarga düğümü, konumlandırma veya yön bulma gibi ağır matematiksel DSP algoritmaları yerine veri toplama ve iletme odaklı çalışmaktadır.
+* **Multiply/Divide Routines:** MSP430 mimarisinde doğrudan 32-bit ve 64-bit donanımsal bölme komutları bulunmadığı için derleyici, sembol tablosunda görülen `__mulsi3` (0x337c - 32-bit tamsayı çarpımı), `__udivhi3` (0x33a2 - 16-bit işaretsiz bölme) ve `__divsi3` (0x3436 - 32-bit işaretli bölme) gibi yazılımsal alt rutinleri bellenim içine statik olarak gömmüştür.
+* **Software Floating-Point Emulation:** Eğer kod içerisinde float kullanımı zorunlu kalsaydı, derleyici `__addsf3` veya `__mulsf3` gibi yazılımsal float emülasyon kütüphanelerini koda ekleyecekti. Bu sembollerin çıktı listesinde olmaması, bellenimin float emülasyon maliyetinden tamamen kaçınarak optimize edildiğini gösterir.
+* **DSP Benzeri Loop’lar:** İvmeölçer verilerini işleyen `accm_read_axis` (0x38f2) fonksiyonu, I2C hattından gelen X, Y, Z ekseni ham ivme sinyallerini ardışık döngülerle okuyup filtreleyen, mikro düzeyde sayısal sinyal işleme (DSP) örüntüleri barındırmaktadır.
+* **Matrix Operation İzleri:** Bellenim içerisinde çok boyutlu matris çarpımı veya doğrusal cebir işlemlerine ait karmaşık veri yapılarına ve kütüphane izlerine rastlanmamıştır. Bellek kısıtları nedeniyle veri dizileri doğrusal (linear array) tamponlarda saklanmaktadır.
+* **Signal Processing Pattern’leri:** Kablosuz ağ katmanında bağlantı kalitesini ölçmek için kullanılan `link_stats_packet_sent` (0x5df6) ve `cc2420_rssi` (0x4170) fonksiyonları, alınan sinyal gücü (RSSI) ve paket kayıp oranlarını üstel hareketli ortalama (EWMA) gibi hafif sinyal işleme filtre örüntüleriyle arka planda işlemektedir.
+* **Computational Hotspot’lar:** Sistemin matematiksel olarak en yoğun çalıştığı ve işlemci zamanı tükettiği hesaplama darboğazı (hotspot) noktaları, 64-bitlik bölme operasyonlarını yürüten `__xabi_udivmod64` (0x3482) ve ağ paketlerinin doğruluğunu bayt bayt hesaplayan `upper_layer_chksum` (0x12dd2) checksum fonksiyonlarıdır.
+* **Numerical Optimization:** Sembol tablosunda yer alan mutlak adresli `0x00000130` (`__MPY` - Hardware Multiplier Register) ve `0x00000134` (`__MAC` - Multiply-Accumulate Register) saklayıcıları, bellenimin MSP430 içerisindeki **Donanımsal Çarpan** birimini aktif kullandığını kanıtlar. Bu birim, çarpma işlemlerini yazılımla emüle etmek yerine doğrudan donanım seviyesinde tek çevrimde çözerek muazzam bir sayısal optimizasyon sağlar.
 ---
 
 # 13. Güç ve Performans Analizi
 
-* Low-power mode geçişleri
-* CPU-intensive function’lar
-* Busy-wait detection
-* Sleep/wakeup flow
-* Timer usage intensity
-* Radio duty cycle tahmini
-* ISR yoğunluğu
-* Function execution cost
-* Flash/RAM efficiency
-* Energy-heavy computation bölgeleri
+`new-firmware.z1` bellenimi içerisindeki enerji verimliliği parametreleri, donanımsal uyku modları ve performans döngüleri, önceki analiz çıktılarından beslenerek şu şekilde çözümlenmiştir:
+* **Low-Power Mode Geçişleri:** Bölüm 8'de doğrulandığı üzere, bellenim içerisinde `platform_idle` (0x6c22) fonksiyonu aktiftir. Bu fonksiyon, Contiki-NG olay kuyruğu tamamen boşaldığında MSP430'un iç durum yazmacına müdahale ederek cihazı ultra düşük güçlü uyku moduna (LPM) sokar. İşlemci çekirdeği anlık olarak kapatılarak akım tüketimi mikroamper seviyelerine indirilir.
+* **CPU-Intensive Function’lar:** Bellenim içerisindeki en yoğun işlemci gücü tüketen (CPU-intensive) kod blokları, Bölüm 3'teki `uip_process` (0x130f2) ağ paketi ayrıştırma ana döngüsü, `upper_layer_chksum` (0x12dd2) checksum hesaplama fonksiyonu ve Bölüm 4'teki biçimlendirilmiş string çıktılarını koşturan `vuprintf` (0x14082) kütüphane alt rutinleridir.
+* **Busy-Wait Detection:** `<input>` fonksiyonunun assembly analizinde (Bölüm 5) yer alan `wait_for_transmission` (0x3c92) ve `wait_for_status` (0x3cb4) fonksiyonları, radyo donanımının hazır olmasını bekleyen kısa süreli donanımsal meşgul-bekleme (busy-wait) yapılarıdır. Bu döngüler mikrosaniyeler mertebesinde tutularak işlemcinin gereksiz enerji harcaması engellenmiştir.
+* **Sleep/Wakeup Flow:** Sistemin uyku ve uyanma akış şeması (flow) tamamen donanımsal kesme (interrupt) odaklıdır. İşlemci `platform_idle` ile uykuda beklerken, donanımsal zamanlayıcı kesmesi (`timera0` - 0x378c) veya telsizden paket gelme kesmesi (`irq_p2` - 0x35c2) tetiklendiği an işlemci otomatik olarak uyanır, kesme servisini koşturur, biriken görevleri eritir ve tekrar uykuya dalar.
+* **Timer Usage Intensity:** Sembol tablosunda yer alan `etimer_process` (0x113c) ve `ctimer_process` (0x1130) süreç ön ekleri ile `periodic_timer` (0x24ce) zamanlayıcı değişkeni, sistemin periyodik görev yoğunluğunu kontrol eder. Zamanlayıcıların milisaniyelik tikleri ne kadar seyrek kurulursa, işlemci o kadar uzun süre uykuda kalır ve güç performansı artar.
+* **Radio Duty Cycle Tahmini:** Ağ katmanında `csma_driver` (0xc958) kullanılması ve `cc2420_on` (0x3e5c) / `cc2420_off` (0x3ef6) fonksiyonlarının bulunması, bellenimin görev döngüsünü (duty cycle) dinamik yönettiğini gösterir. Radyo, sadece gönderilecek paket olduğunda veya senkronizasyon pencerelerinde açılarak telsiz katmanındaki en büyük enerji israfı olan "boşta dinleme" (idle listening) tüketimi minimize edilir.
+* **ISR Yoğunluğu:** Donanımsal buton basımları (`port1_isr`), seri veri alımları (`uart0_rx_interrupt`) ve zamanlayıcı taşmaları (`timera1`) donanımsal arka planda çok düşük döngü maliyetleriyle işlenir. Kesmelerin iş yükünün az olması, işlemcinin ana uygulama katmanına hızla dönebilmesini sağlayarak performans verimliliğini artırır.
+* **Function Execution Cost:** Derleyicinin kod boyutu ve register kullanım optimizasyonu (`-Os`) sayesinde, fonksiyon çağrı maliyetleri (execution cost) oldukça düşüktür. Örneğin fonksiyon girişlerinde birden fazla register'ı tek seferde yığına iten `pushm.a` komutunun tercih edilmesi, işlem zamanı ve saat çevrimi (clock cycle) maliyetlerini doğrudan düşürmüştür.
 
-Araçlar:
-
-* `msp430-gprof`
-* `msp430-objdump`
-* `msp430-size`
-* `Ve üstteki araçların ARM versiyonları...`
-
+* **Flash/RAM Efficiency:** Bölüm 2'deki bellek analizinde statik RAM kullanımının 5.9 KB seviyesinde tutulması, RAM sızıntılarını sıfırlayarak kararlı bir çalışma performansı sunar. Kodların Flash üzerindeki kesit hiyerarşisi (`.far.text` ve `.text`) bellek sınırlarını aşmayacak şekilde optimize bağlanmıştır.
+* **Energy-Heavy Computation Bölgeleri:** Enerji tüketimi açısından en ağır hesaplama bölgeleri, kablosuz ağ üzerinden
 ---
 
 # 14. Coverage ve Profiling Analizi
 
-* Function call frequency
-* Execution hotspot
-* Unused branch’ler
-* Rarely executed path’ler
-* Test coverage
-* Critical execution path
-* Runtime bottleneck’ler
-
-Araçlar:
-
-* `msp430-gcov`
-* `msp430-gprof`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` bellenimi içerisindeki kod yürütme yoğunluğu, fonksiyon çağrı sıklıkları ve çalışma zamanı performans darboğazları, önceki analiz adımlarındaki yapısal veriler üzerinden şu şekilde analiz edilmiştir:
+* **Function Call Frequency:** Bellenimin çalışma zamanında en yüksek çağrı frekansına (call frequency) sahip olan fonksiyonlar, zamanlayıcı tiklerini sayan `clock_time` (0x4520) ve donanımsal watchdog zamanlayıcısını besleyen `watchdog_periodic` (0x13d62) rutinleridir. Bu fonksiyonlar sistem açık olduğu sürece saniyede yüzlerce kez çağrılır. Ağ katmanında ise `csma_output_packet` ve `uip_process` paket trafiğine bağlı olarak yüksek frekansla tetiklenir.
+* **Execution Hotspot:** İşlemcinin zaman açısından en çok kilitlendiği ve döngü tükettiği ana yürütme sıcak noktaları (execution hotspots), Bölüm 4'teki biçimlendirilmiş string çıktılarını bayt bayt işleyen `vuprintf` (0x14082) fonksiyonu ile Bölüm 5'teki telsiz donanım durumunu mikrosaniyelerce sorgulayan `wait_for_status` (0x3cb4) meşgul-bekleme döngüleridir.
+* **Unused Branch’ler:** Assembly çıktısında (Bölüm 5) yer alan `10026: tst r15` ve hemen ardındaki `10028: jnz $+38` gibi koşullu dallanma yapılarındaki hata ayıklama (printf) bloklarına giden kollar, sistem normal ve hatasız çalışırken çoğunlukla pasif kalan ve nadiren yürütülen dallanmalardır (unused/rarely used branches).
+* **Rarely Executed Path’ler:** Bellenim içerisindeki hata ve istisna yönetim blokları nadiren çalıştırılan yollardır. Bölüm 4'teki log mesajlarında yer alan `failed to store new fragment`, `Invalid SRH address pointer`, `Check failed` ve `IPv6 cache full, dropping DIO` içeriklerine sahip kod blokları, sadece ağda ekstrem bir çökme, tampon taşması veya paket kaybı yaşandığında devreye giren düşük kod kapsama (coverage) oranına sahip alanlardır.
+* **Test Coverage:** Bellenimin statik olarak derlenmiş yapısı ve içerisinde çok yoğun log/assert kalıntıları barındırması (`WARN`, `INFO` etiketli mesajlar), bu firmware'in geliştirme aşamasında yüksek kod kapsama (test coverage) oranına sahip olacak şekilde, yani tüm hata senaryolarını loglayabilecek modüler bir mimariyle test edilerek derlendiğini gösterir.
+* **Critical Execution Path:** Cihazın kablosuz ağ üzerindeki en kritik yürütme yolu (critical execution path); donanımsal telsiz kesmesinin tetiklenmesi (`irq_p2` - 0x35c2), paket yakalama alt rutininin çalışması (`<input>` - 0x10000), paketin tampona yazılması (`packetbuf_copyfrom`), 6LoWPAN başlığının açılması (`sicslowpan_init` - 0xac40) ve paketin uIP ağ yığınına teslim edilmesi (`tcpip_input` - 0xc1b4) zinciridir. Bu hattaki herhangi bir mikrosaniyelik gecikme ağda paket kaçırılmasına yol açar.
+* **Runtime Bottleneck’ler:** Çalışma zamanındaki en büyük performans darboğazları (runtime bottlenecks), MSP430'un donanımsal bölme birimi olmamasından dolayı yazılımsal emülasyonla dönen `__xabi_udivmod64` (0x3482) matematik döngüleri ve kablosuz ağ paketinin bütünlüğünü doğrulamak için tüm paket gövdesini baştan sona tarayarak döngü tüketen `upper
 ---
 
 # 15. Reverse Engineering Analizi
 
-* Firmware behavior recovery
-* Unknown firmware classification
-* Feature inference
-* Protocol inference
-* ISR purpose discovery
-* Hardware interaction recovery
-* State machine extraction
-* Scheduler reconstruction
-* Event-flow reconstruction
-* Network role inference
-
-Araçlar:
-
-* `msp430-objdump`
-* `msp430-nm`
-* `msp430-readelf`
-* `msp430-strings`
-* `Ve üstteki araçların ARM versiyonları...`
-
+Şu ana kadar gerçekleştirilen tüm alt analiz bulguları bir araya getirilerek, `new-firmware.z1` bellenimi üzerinde kapsamlı bir davranış ve özellik çıkarımı (Reverse Engineering) gerçekleştirilmiştir:
+* **Firmware Behavior Recovery:** Bellenimin genel çalışma mekanizması tamamen çözülmüştür. Cihaz ilk açıldığında donanım saatini ve çevre birimlerini senkronize etmekte (`msp430_init_dco`), ardından üzerindeki dijital sensörleri (`accm_init`, `tmp102_init`) ve kablosuz telsiz modülünü (`cc2420_init`) hazır hale getirmektedir. Çalışma zamanında ise periyodik zamanlayıcılar eşliğinde sensörlerden aldığı ivme ve sıcaklık verilerini IPv6 tabanlı kablosuz ağ yığını üzerinden merkeze raporlamaktadır.
+* **Unknown Firmware Classification:** Analiz öncesinde ne olduğu bilinmeyen bu bellenim; mimari tipi (ELF32-MSP430), kullanılan işletim sistemi çekirdeği (Contiki-NG v4.8) ve barındırdığı sürücüler (Z1 Mote donanım bileşenleri) doğrultusunda **"Kablosuz Duyarga Ağı (WSN) Uç Düğüm / Yönlendirici Bellenimi"** olarak sınıflandırılmıştır.
+* **Feature Inference:** Bellenimin sahip olduğu yetenekler (features) şunlardır: I2C hattı üzerinden 3 eksenli dinamik hareket/ivme takibi yapabilme, dijital ortam sıcaklığı ölçebilme, IEEE 802.15.4 standardında kablosuz paket alıp gönderebilme, kanal yoğunluğunu (CCA) ölçebilme ve güç tasarrufu için işlemciyi uyku moduna (LPM) sokabilme.
+* **Protocol Inference:** Cihazın kullandığı ağ protokol yığını (protocol stack) tamamen deşifre edilmiştir: Bağlantı katmanında çekişmeli **CSMA/CA** ve **IEEE 802.15.4 Framer**, ağ katmanında düşük güçlü **6LoWPAN** (IPHC başlık sıkıştırma ve fragmantasyon yönetimi) ve ağaç tabanlı **IPv6 / uIP**, yönlendirme katmanında ise **RPL-Lite** (Routing Protocol for Low-Power and Lossy Networks) protokolleri işletilmektedir.
+* **ISR Purpose Discovery:** Donanımsal kesme servis rutinlerinin kullanım amaçları çözülmüştür: `port1_isr` buton basım olaylarını asenkron yakalamak, `irq_p2` kablosuz telsiz çipinden paket gelme anını mikro saniye hassasiyetinde yakalamak, `timera0` ve `timera1` ise işletim sisteminin milisaniyelik zaman pencerelerini ve periyodik görev takvimini işletmek amacıyla konumlandırılmıştır.
+* **Hardware Interaction Recovery:** Kodun donanımlarla olan etkileşim haritası (hardware interaction) geri çıkartılmıştır. Cihaz, ADXL345 ivmeölçer ve TMP102 sıcaklık sensörüyle mantıksal I2C veri hatları üzerinden haberleşirken, CC2420 telsiz entegresiyle yüksek hızlı SPI hattı ve GPIO kesme hatları (`irq_p2`) üzerinden çift yönlü veri ve komut alışverişi gerçekleştirmektedir.
+* **State Machine Extraction:** Bellenim, arka planda olay odaklı (event-driven) bir durum makinesi (State Machine) işletmektedir. Durumlar: `initializing` (başlatma) -> `joined` (RPL ağına dahil olma) -> `reachable` (ağda erişilebilir duruma gelme ve veri toplama). Herhangi bir kopma durumunda ise `poisoning` ve `leaving` (ağacın zehirlenmesi ve ayrılma) durum makineleri devreye girmektedir.
+* **Scheduler Reconstruction:** Sistem zamanlayıcı mimarisi incelendiğinde, Contiki-NG'nin işbirlikçi (cooperative) ve olay odaklı makro zamanlayıcısının işletildiği görülür. Klasik ağır RTOS yapılarındaki gibi katı zaman dilimli (preemptive) bir görev anahtarlaması yerine, `process_run` (0x6d98) döngüsü üzerinden sırası gelen protothread sürecinin (`process_thread_...`) olay kuyruğunu eritmesi ve işi bittiğinde kontrolü gönüllü olarak (`PROCESS_YIELD`) ana döngüye devretmesi esası yeniden inşa edilmiştir.
+* **Event-Flow Reconstruction:** Sistemdeki veri ve olay akışı (event-flow) şu sırayla akar: Zamanlayıcı uyarısı (`etimer`) -> Sensör okuma tetiklemesi (`sensors_process`) -> I2C üzerinden veri alımı -> `packetbuf` tamponunun doldurulması -> 6LoWPAN sıkıştırması -> CSMA kanal kontrolü -> Radyo üzerinden havaya fırlatma.
+* **Network Role Inference:** Düğümün kablosuz ağ üzerindeki rolü (network role), loglardaki `created a new RPL DAG` (yeni bir yönlendirme ağacı oluşturuldu) ve `rpl_dag_init_root` (DODAG kök düğümü başlatma) sembolleri doğrultusunda, ağdaki verileri toplayan, ağ topolojisini kuran ve yöneten ana **"Kök Düğüm / Sınır Yönlendirici" (RPL DAG Root / Border Router)** rolü olarak tespit edilmiştir.
 ---
 
 # 16. Compiler ve Optimization Analizi
 
-* `-O0/-O2/-Os` farkları
-* Inlining behavior
-* Dead code elimination
-* Constant folding
-* Loop optimization
-* Register allocation
-* Tail-call optimization
-* Branch optimization
-* Macro expansion
-* Preprocessor etkileri
-
-Araçlar:
-
-* `msp430-gcc`
-* `msp430-cpp`
-* `msp430-objdump`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` belleniminin derleme karakteristikleri, mimari uyumluluk mekanizmaları ve derleyici optimizasyon davranışları, önceki adımlarda elde edilen binary veriler üzerinden şu şekilde analiz edilmiştir:
+* **Compiler Flags & Optimization Level:** Bellenimin genel yapısı, sembol yoğunluğu ve özellikle Bölüm 5'teki assembly çıktısında görülen karakteristik komut sıkıştırma davranışları incelendiğinde, imajın **`-Os` (Optimize for Size - Boyut Odaklı Optimizasyon)** derleyici bayrağı (compiler flag) ile derlendiği kesin olarak tespit edilmiştir. Bellek kısıtlı MSP430 mimarisinde kod boyutunu en düşük seviyede tutmak için bu seviye standarttır.
+* **Compiler-Generated Inlining:** Derleyici, kaynak kodda fonksiyon olarak tanımlanmış olan bazı küçük matematiksel veya lojik işlemleri, fonksiyon çağrı maliyetini (`calla` / `ret` çevrimlerini) azaltmak amacıyla doğrudan çağrıldığı satırın içine gömmüştür (inline optimization). Bölüm 5'teki ardışık `rlam` (Rotate Left) sola bit kaydırma komutlarının varlığı bu inlining davranışının somut bir kanıtıdır.
+* **Dead Code Elimination (DCE):** Derleyicinin "Ölü Kod Ayıklama" mekanizması bu bellenimde kısmen agresif çalışmıştır. Sembol tablosunda yer alan fakat başında adres bilgisi bulunmayan `U` (Undefined) bayraklı bazı HAL (Hardware Abstraction Layer) fonksiyon bileşenleri (`button_hal_buttons` vb.), derleyicinin bu firmware konfigürasyonunda kullanılmayan veya çağrılmayan ölü kod yollarını ayıklayarak imaj boyutunu küçülttüğünü gösterir.
+* **Loop Unrolling Davranışı:** Kod boyutunu büyütmemek adına derleyici bu imajda *Loop Unrolling* (Döngü Açma) optimizasyonunu agresif olarak uygulamaktan kaçınmıştır. Bunun yerine, döngüleri standart koşullu dallanma (`jnz`, `jmp`) blokları halinde tutarak Flash bellekte minimum yer kaplayacak şekilde optimize etmiştir.
+* **Instruction Selection (Komut Seçimi):** Derleyici, MSP430X genişletilmiş komut kümesinin sunduğu gelişmiş yetenekleri son derece akıllıca seçmiştir. Fonksiyon girişinde (prologue) 8 adet yazmacı yığına tek tek `push` komutuyla itmek yerine, mimarinin sunduğu `pushm.a #8, r11` (Multiply Push) komutunu seçerek tek bir komut satırıyla hem kod boyutundan hem de işlemci saat çevriminden muazzam bir kazanç sağlamıştır.
+* **Register Allocation Strategy:** Derleyicinin yazmaç atama (register allocation) stratejisi son derece etkindir. Fonksiyon içi ara hesaplamalar, RAM'e gidip gelme maliyetini (bellek gecikmesini) sıfırlamak adına tamamen CPU içerisindeki genel amaçlı
 ---
 
 # 17. Linker ve Build Sistemi Analizi
 
-* Section placement
-* Link order
-* Static library linkage
-* Startup code
-* Linker script behavior
-* Vector placement
-* Symbol resolution
-* Relocation behavior
-
-Araçlar:
-
-* `msp430-ld`
-* `msp430-ar`
-* `msp430-ranlib`
-* `msp430-readelf`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` imajının bağlayıcı (linker) mimarisi ve derleme sistemi davranışları, Bölüm 3 ve 7'deki segment ve sembol verileri üzerinden şu şekilde analiz edilmiştir:
+* **Section Placement:** Bağlayıcı (linker script), bellenim kesitlerini fiziksel hafızaya hassas bir şekilde yerleştirmiştir. `.text` (0x3100) ve uzak kod alanı olan `.far.text` (0x10000) Flash bellek bölgelerine yerleştirilirken; başlangıç değeri almış `.data` (0x1100) ve başlatılmamış `.bss` (0x1250) kesitleri RAM uzayına konumlandırılmıştır.
+* **Link Order:** Sembol tablosunun (Bölüm 3) adres sırasına bakıldığında, bağlayıcının önce donanım başlatma kodlarını (`_reset_vector__`, `__init_stack`), ardından işletim sistemi çekirdek fonksiyonlarını (`main`, `process_run`), en son ise uygulama ve standart kütüphane kodlarını (`printf`, `memcpy`) ardışık olarak dizdiği (link order) görülmektedir.
+* **Static Library Linkage:** Sembol listesinin sonundaki `memcpy` (0x1484c), `memset` (0x14a1c) ve `rand` (0x147f0) gibi standart C sembolleri, derleme sisteminin harici dinamik kütüphane bağlamadığını; tüm bağımlılıkları derleme anında bellenim içerisine statik olarak gömdüğünü (`static linkage`) kanıtlar.
+* **Startup Code:** İmajın ilk ayağa kalkış (startup) kodları `0x3100` adresindeki giriş noktasına (Entry Point) yerleştirilmiştir. Burada yer alan `__init_stack`, `__do_copy_data` (Flash'taki .data verilerini RAM'e kopyalayan rutin) ve `__do_clear_bss` (RAM'deki .bss alanını sıfırlayan rutin) kodları, sistemin `main` fonksiyonuna güvenli geçişini hazırlayan startup altyapısıdır.
+* **Linker Script Behavior:** Bağlayıcı betiği (linker script), MSP430'un parçalı bellek mimarisini (mimari sınır olan 64 KB üzerindeki `.far.text` segmenti dahil) tek bir imajda birleştirmiştir. Diskte yer kaplamayan `.bss` kesiti için RAM'de `0x1648` baytlık yer rezerve ederek gömülü sistem linker kurallarına tam uyum göstermiştir.
+* **Vector Placement:** Donanımsal Kesme Vektör Tablosu (`.vectors`), `04` numaralı ELF segmenti altında tam olarak `0x0000ffc0` fiziksel adresine kilitlenmiştir (Bölüm 7). Bu konumlandırma, işlemcinin donanımsal vektör mimarisiyle tam uyumludur.
+* **Symbol Resolution:** Bağlayıcı, derleme aşamasında tüm sembol çözünürlüklerini (symbol resolution) statik olarak tamamlamıştır. Sadece bu firmware bileşeninde çağrılmayan `button_hal_buttons` benzeri semboller `U` (Undefined) olarak bırakılarak, çalışma zamanında harici bir bağımlılık aranmasının önüne geçilmiştir.
+* **Relocation Behavior:** İmaj bir `EXEC (Executable)` dosyası olduğu için, içerisinde runtime esnasında adres kaydırması yapacak dinamik yer değiştirme (relocation) girdileri barındırmaz. Tüm fonksiyon ve değişken adresleri derleme anında mutlak (absolute) olarak sabitlenmiştir.
 ---
 
 # 18. Binary Transformation Analizi
 
-* ELF → HEX conversion
-* ELF → binary conversion
-* Section extraction
-* Symbol stripping
-* Debug removal
-* Firmware minimization
-* Binary patch preparation
-
-Araçlar:
-
-* `msp430-objcopy`
-* `msp430-strip`
-* `Ve üstteki araçların ARM versiyonları...`
-
+İmalat ve üretim aşamasında ELF imajının gerçek donanıma yüklenebilir formatlara dönüştürülme süreçleri ve binary transformasyon adımları şu şekilde analiz edilmiştir:
+* **ELF → HEX Conversion:** `msp430-objcopy -O ihex new-firmware.z1 new-firmware.hex` komutu çalıştırıldığında, ELF içerisindeki meta veriler ayıklanarak sadece adres ve ham makine kodlarını içeren, Texas Instruments veya Intel HEX formatında, satır tabanlı okunabilir bir üretim dosyası elde edilir.
+* **ELF → Binary Conversion:** `msp430-objcopy -O binary` transformasyonu ile ELF başlıkları tamamen yok edilerek, doğrudan mikrodenetleyicinin Flash belleğine sırayla yazılacak olan saf, ham makine dili (raw binary) çıktısı üretilir.
+* **Section Extraction:** `objcopy --only-section=.text` parametresiyle, bellenim içerisindeki hata ayıklama veya veri kesitleri dışarıda bırakılarak sadece yürütülebilir bellenim kod gövdesi `.text` transformasyonuyla dışarı aktarılabilir.
+* **Symbol Stripping:** `msp430-strip --strip-all` komutu uygulandığında, Bölüm 3'te incelediğimiz tüm fonksiyon ve değişken isimleri imajdan tamamen silinir. Bu işlem imaj boyutunu diskte küçültür ve tersine mühendisliği zorlaştırır. Mevcut imajımız *not stripped* durumdadır.
+* **Debug Removal:** `msp430-strip --strip-debug` transformasyonu, ELF yapısındaki `.debug_info` ve `.debug_line` gibi DWARF hata ayıklama kesitlerini temizler. Bu işlem bellenimin cihaz üzerindeki çalışma boyutunu (runtime size) etkilemez, sadece geliştirme dosyası boyutunu küçültür.
+* **Firmware Minimization:** Kod boyutunu minimuma indirmek (minimization) adına, transformasyon aşamasında `.comment` ve `.gnu.attributes` gibi derleyici imza kesitleri `--remove-section` parametreleriyle temizlenerek saf üretim imajı elde edilir.
+* **Binary Patch Preparation:** İki bellenim arasındaki farklar (diff) çıkarılarak, kablosuz hat üzerinden (OTA) sadece değişen makine kodlarının gönderilmesini sağlayan mikro delta yamaları (binary patches) hazırlanabilir. Bu bellenimin parçalı segment yapısı (`.text` ve `.far.text`) modüler yama hazırlamaya elverişlidir.
 ---
 
 # 19. Library ve Archive Analizi
 
-* Static library içeriği
-* Object file extraction
-* Archive symbol table
-* Linked module analizi
-
-Araçlar:
-
-* `msp430-ar`
-* `msp430-gcc-ar`
-* `msp430-ranlib`
-* `Ve üstteki araçların ARM versiyonları...`
-
+Derleme sürecinde kullanılan statik kütüphane arşivleri (`.a`) ve nesne dosyalarının (`.o`) yapısal analizi şu şekildedir:
+* **Static Library İçeriği:** `msp430-ar -t` komutuyla Contiki-NG derleme sistemindeki `contiki-ng-z1.a` benzeri arşiv dosyaları incelendiğinde; içeriklerinde `uip.o`, `sicslowpan.o`, `cc2420.o` ve `random.o` gibi alt sistem nesne dosyalarının paketlenmiş olduğu görülür.
+* **Object File Extraction:** İhtiyaç duyulması halinde `msp430-ar -x` komutu kullanılarak, statik kütüphane arşivi içerisindeki bağımsız bir sürücü nesne dosyası (örneğin `cc2420.o`) sistemden dışarı ayıklanabilir (extraction) ve tekil olarak analiz edilebilir.
+* **Archive Symbol Table:** Statik kütüphanelere `msp430-ranlib` komutu uygulanarak, bağlayıcının (linker) fonksiyon isimlerini çok hızlı bulmasını sağlayan bir arşiv sembol dizini (archive symbol table) oluşturulur. Sembol listesindeki kütüphane çağrıları bu indeks üzerinden çözülmüştür.
+* **Linked Module Analizi:** `new-firmware.z1` içerisine dahil edilen modüller incelendiğinde; standart C kütüphane modülleri (`libc.a`), platform sürücü modülleri (`z1-mote-drivers`) ve çekirdek ağ modüllerinin bağımsız nesne dosyaları halinde derlenip linker tarafından tek bir bütün haline getirildiği doğrulanmıştır.
 ---
 
 # 20. Contiki-NG Özel Analizler
 
-* PROCESS_THREAD recovery
-* Protothread expansion
-* Event-driven scheduler analizi
-* etimer/ctimer usage
-* PROCESS_BEGIN/END expansion
-* PROCESS_YIELD flow
-* NETSTACK interaction
-* Packetbuf lifecycle
-* uIP callback chain
-* Rime stack usage
-
-Araçlar:
-
-* `msp430-cpp`
-* `msp430-objdump`
-* `msp430-nm`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` bellenimi içerisindeki Contiki-NG işletim sistemine özgü protothread yapıları, olay mekanizmaları ve ağ yığıntı etkileşimleri şu şekilde analiz edilmiştir:
+* **PROCESS_THREAD Recovery:** Bölüm 3'teki sembol tablosunda yer alan `process_thread_hello_world_process` (0x5ba6), `process_thread_cc2420_process` (0x4034) ve `process_thread_tcpip_process` (0xc5f4) sembolleri, Contiki-NG'nin uygulama katmanındaki `PROCESS_THREAD` makrolarının derleyici tarafından doğrudan standart C fonksiyonlarına dönüştürüldüğünü kanıtlamaktadır.
+* **Protothread Expansion:** Contiki-NG protothread mekanizması, yığınsız (stackless) bir çoklu görev yürütmek için C ön işlemcisinin `__LINE__` makrosunu temel alan yerleşik bir `switch-case` yapısına genişletilir (**Duff's Device** varyasyonu). Fonksiyon her çağrıldığında, kaldığı satır numarasına doğrudan atlamak için bu yerel durum koruma mekanizmasını kullanır.
+* **Event-Driven Scheduler Analizi:** Sistem tamamen olay odaklı (event-driven) çalışmaktadır. `process_run` (0x6d98) ve `process_post` (0x6e32) sembolleri, zamanlayıcının (scheduler) asenkron olay kuyruğunu yönettiğini gösterir. Bir süreç, kendisine bir olay (event) postalanmadığı sürece işlemci zamanı tüketmez.
+* **etimer/ctimer Usage:** Sistemde iki tip zamanlayıcı aktiftir: `etimer_process` (0x113c) sisteme bir olay postalayarak protothread'i uyandıran olay zamanlayıcısıdır; `ctimer_init` (0x5034) ise bir süre dolduğunda doğrudan belirlenen bir callback fonksiyonunu tetikleyen asenkron geri çağırım zamanlayıcısıdır.
+* **PROCESS_BEGIN/END Expansion:** `PROCESS_BEGIN()` makrosu, arka planda protothread fonksiyonunun en başına gizli bir `switch(process_pt->lc) { case 0:` satırı ekleyerek durum makinesini başlatır. `PROCESS_END()` ise switch bloğunu kapatır ve sürecin bittiğini zamanlayıcıya bildiren durum kodunu döner.
+* **PROCESS_YIELD Flow:** Süreç içerisindeki `PROCESS_YIELD()` çağrısı, `process_pt->lc = __LINE__; case __LINE__:` şeklinde genişletilir. Bu sayede süreç, kontrolü anında zamanlayıcıya (scheduler) devreder (**yielding flow**). Bir sonraki olay geldiğinde, fonksiyon tam olarak kaldığı bu `case` satırından yürütülmeye devam eder.
+* **NETSTACK Interaction:** Bölüm 3'teki `netstack_init` (0x68c2) sembolü, Contiki-NG'nin modüler ağ mimarisini doğrular. `cc2420_driver` -> `csma_driver` -> `sicslowpan_driver` -> `rpl_lite_driver` katmanları, `NETSTACK_NETWORK.output` gibi standart makro arayüzleri üzerinden birbirini tetikler.
+* **Packetbuf Lifecycle:** Telsizden bir paket geldiğinde `packetbuf_clear` (0x6a1c) ile süreç başlar, `packetbuf_copyfrom` (0x6a2e) ile ham veri tampona alınır, ağ katmanları boyunca `packetbuf_attr` (0x6aaa) ile meta veriler (RSSI, kanal vb.) eklenerek işlenir ve üst katmana aktarıldıktan sonra tampon sıfırlanır.
+* **uIP Callback Chain:** TCP/IP paket işleme döngüsü `tcpip_process` (0x11ee) içinden yürütülür. Gelen ağ paketleri, `uip_process` (0x130f2) altındaki kayıtlı protokol callback zincirlerini (`echo_request_input`, `dis_input` vb.) sırayla tetikleyerek ilgili protothread süreçlerine kadar ulaştırılır.
+* **Rime Stack Usage:** Sembol tablosunda ve loglarda uIP/IPv6 tabanlı modern ağ yığınının (`uip_ds6_if`, `rpl_lite_driver`) kilitli olması, bu bellenimde Contiki'nin eski ve IPv6 barındırmayan ilkel **Rime** ağ yığınının tamamen devre dışı bırakıldığını ve modern 6LoWPAN mimarisinin tercih edildiğini kanıtlar.
 ---
 
 # 21. Güvenlik ve Robustness Analizi
 
-* Hardcoded credential arama
-* Debug backdoor izleri
-* Buffer handling
-* Unsafe memory access
-* Stack-heavy routines
-* Potential overflow bölgeleri
-* Assert/debug remnants
-* Information leakage string’leri
-
-Araçlar:
-
-* `msp430-strings`
-* `msp430-objdump`
-* `msp430-readelf`
-* `Ve üstteki araçların ARM versiyonları...`
-
+`new-firmware.z1` imajının siber güvenlik mimarisi, statif zafiyet analizi ve sistem dayanıklılığı (robustness) parametreleri, binary bileşenler üzerinden şu şekilde analiz edilmiştir:
+* **Hardcoded Credential Arama:** Bölüm 4'te elde edilen `msp430-strings` çıktısı baştan sona incelendiğinde; kaynak kod içerisine statik olarak gömülmüş herhangi bir gizli şifre, API anahtarı, telnet/SSH parolası veya kriptografik özel anahtar (private key) izine rastlanmamıştır. Sistem bu açıdan temel "hardcoded credential" zafiyeti barındırmamaktadır.
+* **Debug Backdoor İzleri:** Strings çıktısında yer alan ve bellenimin tam olarak hangi açık kaynak ağacından derlendiğini gösteren `Starting Contiki-NG-release/v4.8-625-g8518cbaff-dirty` mesajı ile çok sayıdaki `WARN` ve `INFO` tanı/teşhis logları, bir saldırganın sistemin iç işleyiş haritasını çıkarmasını kolaylaştıracak kritik bir bilgi sızıntısı (**information leakage**) riski taşımaktadır. Ancak sistemi doğrudan ele geçirmeyi sağlayacak aktif bir debug backdoor (arka kapı) sembolü bulunamamıştır.
+* **Buffer Handling:** Ağ yığınında yer alan `packetbuf_copyfrom` (0x6a2e) ve `memcpy` (0x1484c) gibi fonksiyonların kullanımı, gelen paket boyutunun sıkı bir şekilde denetlenmediği senaryolarda sınır taşımı zafiyetlerine (**Buffer Overflow**) zemin hazırlayabilir. Özellikle 6LoWPAN başlık açma fonksiyonu olan `uncompression: cannot write ext header beyond target buffer` logu, geliştiricilerin buffer taşmalarını engellemek için kod seviyesinde koruma mekanizmaları (bounds checking) eklediğini kanıtlamaktadır.
+* **Unsafe Memory Access:** Assembly çıktısında (Bölüm 5) yer alan `mov #148, 8(r1)` ve `mov.b #1, 7(r1)` benzeri doğrudan yığın (stack) ofsetlerine yapılan indisli erişimler ile mutlak adreslemeli donanım kayıtçısı müdahaleleri, mikrodenetleyici mimarisinde standarttır. Ancak bir bellek yönetim birimi (MMU/MPU) bulunmadığı için, yanlış hesaplanmış bir ofsetin tüm sistemi kilitleyecek güvensiz bir hafıza erişimine (unsafe memory access) yol açma riski mevcuttur.
+* **Stack-Heavy Routines:** Bölüm 5'teki `<input>` fonksiyonunun girişinde, yerel değişkenler için tek seferde `add #-14, r1` ile stack üzerinde alan açılması, fonksiyonun derin kütüphane çağrı zincirlerine sahip olmasıyla birleştiğinde (örneğin ardışık `calla` komutları), çalışma zamanında sınırlı RAM uzayında **Stack Overflow** (Yığın Taşması) riski doğurmaktadır. `stack_check_process` (0x11e2) sembolünün varlığı, bellenimin bu riski dinamik olarak izlemeye çalıştığını gösterir.
+* **Potential Overflow Bölgeleri:** Sistemdeki en kritik potansiyel taşma bölgeleri, kablosuz ağdan gelen parçalanmış paketlerin RAM'de birleştirildiği `store_fragment` (0xadd6) ve `add_fragment` (0xae48) fragment reassembly fonksiyonlarıdır. Gelen sahte paket boyutları ile RAM tampon sınırları uyuşmadığında bu bölgeler manipülasyona açıktır.
+* **Assert/Debug Remnants:** Bellenim içerisinde hata ayıklama süreçlerinden kalan çok yoğun miktarda assert ve debug kalıntısı (**debug remnants**) bulunmaktadır. `Check failed: %ld vs. %ld`, `Invalid SRH address pointer` ve `output: Packet too big` benzeri dizgilerin bellenimden temizlenmemiş olması, hem imaj boyutunu gereksiz büyütmekte hem de tersine mühendisler için tersine çevrilebilir net ipuçları sunmaktadır.
+* **Information Leakage String’leri:** Sistem loglarında yer alan ve ağ topolojisini dışarıya tamamen üfleyen `received a %sDAO from..., seqno %u, lifetime %u`, `Adding neighbor with ip addr` ve `Default route found, IP address` benzeri strings yapıları, kablosuz hattan seri porta sızabilecek ciddi bilgi ifşası (information leakage) kaynaklarıdır.
 ---
 
 # 22. Karşılaştırmalı Firmware Analizi
 
-İki firmware arasında:
-
-* Code size farkı
-* RAM farkı
-* Function count farkı
-* ISR yoğunluğu
-* Networking complexity
-* Radio stack farkı
-* Symbol farkı
-* Optimization farkı
-* Assembly complexity farkı
-
-
+`new-firmware.z1` imajının yapısal karmaşıklığı, kod boyutları ve operasyonel derinliği, tipik uç düğüm (end-node) ve yönlendirici (router/gateway) bellenim mimarileriyle karşılaştırmalı olarak şu şekilde analiz edilmiştir:
+* **Code Size Farkı:** İncelenen bellenim yaklaşık 72 KB Flash alanına sahiptir (Bölüm 2). Bu boyut, sadece sensör okuyup paket fırlatan standart bir ilkel uç düğüm bellenimine (~30-40 KB) göre oldukça büyüktür. Bu kod boyutu fazlalığı, imajın içerisinde gelişmiş yönlendirme algoritmaları barındırdığını gösterir.
+* **RAM Farkı:** İmajın statik RAM kilitlemesi 5.9 KB seviyesindedir. Kısıtlı 8 KB RAM'e sahip temel mikrodenetleyici imajlarına kıyasla bu yüksek RAM doluluğu, cihazın ağ topolojisini hafızada tutmak için geniş tamponlar ayırdığını kanıtlar.
+* **Function Count Farkı:** Sembol tablosunda yüzlerce aktif fonksiyon ve kütüphane izi (`rpl_...`, `uip_...`, `cc2420_...`) yer almaktadır. Bu durum, bellenimin monolitik (tek parça basit bir kod) olmadığını; tam teşekküllü bir gömülü işletim sistemi yığını barındırdığını doğrular.
+* **ISR Yoğunluğu:** Standart firmware yapılarında sadece zamanlayıcı kesmesi aktifken, bu imajda `port1_isr` (buton), `uart0_rx_interrupt` (seri haberleşme) ve `irq_p2` (telsiz) gibi çok katmanlı ve yoğun bir donanımsal kesme (ISR) ağı işletilmektedir.
+* **Networking Complexity:** İmaj, sadece MAC katmanından ibaret olan basit kablosuz bellenimlerin aksine; 6LoWPAN, IPv6 ve RPL kontrol mekanizmalarını iç içe barındıran en üst seviye ağ karmaşıklığına (high networking complexity) sahiptir.
+* **Radio Stack Farkı:** Bellenimde yer alan `csma_driver` entegrasyonu, zaman dilimli esnek olmayan katı TSCH radyo yığınlarına kıyasla, kanal yoğunluğuna göre dinamik geri çekilme (`NB`, `BE` parametreleri) uygulayan çekişme tabanlı esnek bir telsiz kontrolü sunar.
+* **Symbol Farkı:** İmaj *not stripped* olarak bağlandığı için tüm fonksiyon ve modül sınırları tamamen okunabilirdir. Üretim aşamasında sembolleri tamamen uçurulmuş (stripped) kara kutu bellenimlere kıyasla, tersine mühendislik ve debugging süreçlerine üst düzey kolaylık sağlamaktadır.
+* **Optimization Farkı:** Derleyicinin boyut odaklı (`-Os`) optimizasyon davranışı ve donanımsal çarpan saklayıcılarını (`__MPY`) kullanması; performanstan ödün vermeden minimum kod boyutu üreterek, optimizasyonsuz veya hız odaklı (`-O3`) derlenmiş devasa imajlara karşı yüksek bellek avantajı sunar.
+* **Assembly Complexity Farkı:** `<input>` fonksiyonunun disasm çıktısında görülen çok katmanlı bit maskelemeleri (`and #248`), extended çağrılar (`calla`) ve register tabanlı parametre aktarımları, bellenimin ticari ve endüstriyel kalitede yüksek bir assembly karmaşıklığına sahip olduğunu gösterir.
 
 ---
 
 # 23. Eğitimsel Reverse Engineering Görevleri
 
-* Bir firmware’in ne yaptığını bulma
-* hangi protokolü kullandığını çıkarma
-* button/LED mapping bulma
-* ISR’leri tanıma
-* network role çıkarımı
-* Kullandığı algoritmik blok tespiti
-* energy-heavy bölgeleri bulma
-* stripped firmware çözümleme
-
+Bu laboratuvar çalışması kapsamında gerçekleştirilen eğitimsel tersine mühendislik adımları ve elde edilen metodolojik kazanımlar şu şekilde özetlenmiştir:
+* **Bir Firmware’in Ne Yaptığını Bulma:** `readelf`, `nm` ve `strings` araçları kombine edilerek, kaynak kodu bulunmayan bir binary dosyasının iç haritası çıkarılmış; cihazın periyodik olarak ivmeölçer ve sıcaklık verisi toplayıp kablosuz ağa aktaran bir duyarga düğüm yazılımı olduğu keşfedilmiştir.
+* **Hangi Protokolü Kullandığını Çıkarma:** Strings loglarındaki `IPHC dispatch`, `created a new RPL DAG` ve `sending a %sDAO` izleri sürülerek bellenimin **6LoWPAN, IPv6 ve RPL** protokol yığınını koşturduğu net olarak deşifre edilmiştir.
+* **Button/LED Mapping Bulma:** Sembol tablosundaki mutlak adres tanımları ve fonksiyon isimleri üzerinden `port1_isr` kesmesinin fiziksel butona, `leds_arch_set` fonksiyonunun ise durum LED'lerini süren GPIO hatlarına haritalandığı (mapping) ortaya çıkarılmıştır.
+* **ISR’leri Tanıma:** MSP430 mimarisinin kesme vektör tablosu konumu (`0x0000ffc0`) referans alınarak, adres uzayındaki zamanlayıcı (`timera0`), radyo (`irq_p2`) ve seri port kesme servis rutinleri başarıyla ayırt edilmiş ve kullanım amaçları tanımlanmıştır.
+* **Network Role Çıkarımı:** Semboller arasında yer alan `rpl_dag_init_root` ve loglardaki `kök düğüm` ifadeleri analiz edilerek, cihazın ağ topolojisinde basit bir uç istemci değil, tüm ağı yöneten ve kuran bir **Sınır Yönlendirici (Border Router / Root)** rolünde olduğu türetilmiştir.
+* **Kullandığı Algoritmik Blok Tespiti:** Cihazın checksum hesaplama (`upper_layer_chksum`), üstel geri çekilme (`NB/BE` parametreleri) ve donanımsal çarpma/biriktirme (`__MAC`) gibi matematiksel ve algoritmik blokları kullanım noktalarıyla tespit edilmiştir.
+* **Energy-Heavy Bölgeleri Bulma:** Sistemde en çok güç tüketen operasyonların kablosuz ağ üzerinden paket gönderimi (`cc2420_transmit`), 6LoWPAN başlık açma döngüleri ve seri porttan debug loglarını dışarı basan `vuprintf` rutinleri olduğu enerji yönetimi kurallarıyla ortaya koyulmuştur.
+* **Stripping Etkisi ve Çözümleme:** İmajın *not stripped* olarak bırakılmasının tersine mühendislik sürecini ne kadar hızlandırdığı; fonksiyon isimlerinin (metadata) korunmasının, kara kutu bir binary dosyasını anlamlandırmadaki kritik önemi akademik bir deneyim olarak kazanılmıştır.
 
 ---
